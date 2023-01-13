@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>数独</title>
+    <style>
+        body {
+            text-align: center
+        }
+
+        .list {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        ul, li {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        ul {
+            border: 2px solid #000;
+            border-right: none;
+            width: 471px;
+            counter-reset: section -1;
+        }
+
+        ul::after {
+            content: '';
+            display: table;
+            clear: both;
+        }
+
+        li {
+            float: left;
+            border: 1px solid #5f666c;
+            width: 50px;
+            padding: 4px 0;
+            position: relative;
+        }
+
+        li:after {
+            position: absolute;
+            left: 0;
+            color: #e3e3e3;
+            font-size: 24px;
+            width: 50px;
+            z-index: -1;
+            counter-increment: section 1;
+            content: counter(section);
+        }
+
+        li:nth-child(3n) {
+            border-right: 2px solid #000;
+        }
+
+        li:nth-child(n+19) {
+            border-bottom: 2px solid #000;
+        }
+
+        li:nth-child(n+28) {
+            border-bottom: 1px solid #5f666c;
+        }
+
+        li:nth-child(n+46) {
+            border-bottom: 2px solid #000;
+        }
+
+        li:nth-child(n+55) {
+            border-bottom: 1px solid #5f666c;
+        }
+
+        input {
+            border: none;
+            background-color: transparent !important;
+            padding: 0;
+            width: 100%;
+            text-align: center;
+            font-size: 30px;
+            color: #5d5d5d;
+        }
+
+        input:valid {
+            background: #fff !important;
+        }
+
+        input.lock {
+            color: green;
+        }
+
+        input:focus {
+            outline: none;
+        }
+
+        h2 {
+            font-size: 28px;
+        }
+
+        button {
+            margin-top: 20px;
+            padding: 4px 20px;
+            text-align: center;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+<div class="list">
+    <h2>数独</h2>
+    <ul></ul>
+    <button type="button" name="rand">随机</button>
+    <button type="button" name="begin">开始</button>
+    <button type="button" name="result" data-index="0">答案</button>
+    <div>
+        <input type="range" min="0" value="0.5" step="0.1" max="1" title="随机难度">
+    </div>
+</div>
+
+<script>
+    /*
+    * 解题思路：
+    * begin：算出每个空格可以填写的数（方法:通过相关格子的确定值替换得出，如果产生有唯一确定值，需要再次循环）
+    * second：
+    * 1、排序找出可能值最少的一个格子（本身值2位以上）
+    * 1.1、假如不存在：说明begin就已经排序完，验证结果退出
+    * 1.2、尝试一个可能值x，当成是确定值插入，并把自己放到尝试列表，备份其他可能值以便恢复
+    * 1.3、leach 尝试把所有没确定值的相关格子过滤掉x值。
+    * 1.4、如果过滤后只有一个值就变成确定值x，返回1.3循环。
+    * 1.5、进行结果判断checkSuccess
+    * 1.5.1、还存在2位以上可能值，循环 1
+    * 1.5.2、出错：换一个尝试值
+    * 1.5.2、成功：记录结果，继续换一个尝试值
+    * */
+
+    const SUDOKU = {
+        // 始初化
+        initialize() {
+            const t = this
+            const arr = new Array(81).fill(0)
+            document.querySelector('.list ul').innerHTML = arr.map((v, i) => `<li>
+            <input type="text" maxlength="1" pattern="^[1-9]{1}$" required data-index="${i}"></li>`).join('')
+            const inputs = document.querySelectorAll('ul input')
+            Object.assign(t, {
+                but: document.querySelector('button[name="result"]'),
+                err: false,
+                random: 0.5,// 随机率
+                randList: new Set(),
+                inputs: inputs,// 输入框集群
+                list: arr.map((v, index) => ({
+                    val: '',
+                    index,
+                    relation: [] // 相关格子的序号
+                })),// 原始数组
+                testList: [{
+                    index: 2, // 序号
+                    testVal: [5], // 测试值
+                    values: [{index: 3, val: '23'}] // 备份其它值，以便重试时恢复值
+                }],// 需要排序数组
+                result: [],// 成功结果
+                matrixAll: [],// 矩阵，以便核验
+            })
+            t.randList.add("2,3,6,9,5,7,8,1,4,8,9,5,2,1,4,6,3,7,7,1,4,8,3,6,2,9,5,9,5,3,6,4,8,7,2,1,1,6,7,3,9,2,5,4,8,4,8,2,5,7,1,9,6,3,6,4,1,7,8,9,3,5,2,5,7,9,4,2,3,1,8,6,3,2,8,1,6,5,4,7,9")
+            t.testList = [] //强制清空
+            // 处理矩阵数据
+            const rowAll = [] // 行集合
+            const colAll = [] // 列集合
+            const matrixAll = [] // 阵集合
+            const f = (arr, index, v, i) => {
+                if (!Array.isArray(arr[index])) {
+                    arr[index] = []
+                }
+                if (i === undefined) {
+                    arr[index].push(v)
+                } else {
+                    arr[index][i] = v
+                }
+            }
+            t.list.forEach((o, index) => {
+                const colIndex = index % 9
+                f(rowAll, Math.trunc(index / 9), o, colIndex)
+                f(colAll, colIndex, o)
+                f(matrixAll, Math.trunc(colIndex / 3) + Math.trunc(index / 27) * 3, o)
+            })
+            t.matrixAll = [...rowAll, ...colAll, ...matrixAll]
+            t.list.forEach((o, index) => {
+                o.relation = [...new Set([
+                    Math.trunc(index / 9),
+                    index % 9 + 9,
+                    Math.trunc(index % 9 / 3) + Math.trunc(index / 27) * 3 + 18
+                ].map(i => t.matrixAll[i]).flat().filter(v => v !== o).map(o => o.index))]
+            })
+        },
+        begin(re) {
+            const t = this
+            let loop = false
+            let err = false
+            t.list.forEach(item => {
+                !re && t.inputs[item.index].setAttribute('class', item.val.length === 1 ? 'lock' : '')
+                if (!err && item.val.length === 0) {
+                    let str = '123456789'// 获取元素可能的值
+                    item.relation.map(i => this.list[i]).filter(o => o.val.length === 1).forEach(o => {
+                        str = str.replace(o.val, '')
+                    })
+                    item.val = str
+                    if (str === '') {
+                        err = true
+                    } else if (str.length === 1) {
+                        loop = true
+                    }
+                }
+            })
+            err ? t.but.click() : (loop ? t.begin(true) : t.second())
+        },
+        second(reTry) {
+            const t = this
+            let obj
+            if (reTry) {
+                // 换一个尝试值
+                obj = t.testList.slice(-1)[0] // 取最后一个
+                while (obj && obj.testVal.length === 0) {
+                    t.testList.pop()
+                    obj = t.testList.slice(-1)[0]
+                }
+                if (!obj) {
+                    t.but.click()
+                    return console.log('不能再尝试了！')
+                }
+                obj.values.forEach(o => {
+                    t.list[o.index].val = o.backVal // 恢复值
+                })
+                t.list[obj.index].val = obj.testVal.pop() //尝试A的可能最后一位x值尝试填入
+            } else {
+                //1、排序找出可能值最少的一个格子（本身值2位以上）
+                const arr = t.list.filter(o => o.val.length > 1).sort((a, b) => a.val.length - b.val.length)
+                obj = arr.shift()
+                if (!obj) {
+                    t.checkSuccess()
+                    t.but.click()
+                    return console.log('已经没有元素了')
+                }
+                console.log('1、排序找出可能值最少的一个格子', obj.index, obj.val)
+                const testVal = obj.val.split('')
+                t.list[obj.index].val = testVal.pop() //尝试A的可能最后一位x值尝试填入
+                t.testList.push({
+                    index: obj.index,
+                    testVal: testVal,
+                    values: t.list.map(o => ({
+                        index: o.index, backVal: o.val
+                    }))
+                })
+            }
+            //1.2、尝试把所有没确定值的相关格子过滤掉x值。
+            t.err = false
+            t.leach(obj.index)
+            console.log('重试列表：', t.testList)
+            console.table(t.matrixAll.slice(0, 9).map(o => o.map(o => o.val)))
+            let retry = t.err
+            if (t.list.every(o => o.val.length === 1)) {
+                t.checkSuccess()
+                retry = true
+            }
+            setTimeout(t.second.bind(t), 0, retry)
+        },
+        leach(index) {
+            const t = this
+            const arr = []
+            const obj = t.list[index]
+            obj.relation.map(i => t.list[i]).forEach(item => {
+                const v = item.val
+                if (!t.err) {
+                    item.val = v.replace(obj.val, '')
+                    if (item.val === '') {
+                        t.err = true
+                    } else if (item.val.length === 1 && v.length > 1) {
+                        arr.push(item.index)
+                    }
+                }
+            })
+            !t.err && arr.forEach(t.leach.bind(t))
+        },
+        checkSuccess() {
+            const t = this
+            if (t.matrixAll.every(o => new Set(o.map(b => b.val)).size === 9)) {
+                console.log('ok!')
+                t.randList.add(t.list.map(o => o.val).join(','))
+                t.result.push(t.matrixAll.slice(0, 9).map(o => o.map(o => o.val)))
+                t.but.innerText = `结果 ${t.but.dataset.index}/${t.result.length}`
+            }
+        }
+    }
+
+    window.onload = function () {
+        window.t = SUDOKU
+        t.initialize()
+        document.addEventListener('focusout', e => {
+            const tag = e.target
+            if (tag.tagName === 'INPUT' && tag.dataset.index) {
+                const val = tag.value
+                const item = t.list[tag.dataset.index]
+                if (/^\d$/.test(val) && !item.relation.map(v => t.inputs[v].value).includes(val)) {
+                    item.val = val
+                } else {
+                    tag.value = ''
+                }
+            }
+        }, false)
+        document.querySelector('input[type="range"]').addEventListener('change', e => {
+            t.random = Number(e.target.value)
+        })
+        document.addEventListener('click', e => {
+            const tag = e.target
+            if (tag.tagName === 'BUTTON') {
+                switch (tag.name) {
+                    case 'rand':
+                        //随机
+                        const arr = Array.from(t.randList.keys())
+                        arr[Math.floor(Math.random() * arr.length)].split(',').forEach((v, i) => {
+                            t.inputs[i].value = t.list[i].val = Math.random() > t.random ? v : ''
+                        })
+                        break
+                    case 'begin':
+                        // 同步值
+                        t.inputs.forEach((e, i) => {
+                            t.list[i].val = e.value
+                        })
+                        t.result = [] //清空结果
+                        t.but.dataset.index = '0'
+                        t.but.innerText = '结果'
+                        t.begin()
+                        break
+                    case 'result':
+                        //答案
+                        const len = t.result.length
+                        if (len) {
+                            const index = Number(tag.dataset.index)
+                            const i = index >= len ? 0 : index
+                            const next = i + 1
+                            tag.innerText = `结果 ${next}/${len}`
+                            t.result[i].flat().forEach((v, n) => {
+                                t.list[n].val = t.inputs[n].value = v
+                            })
+                            tag.dataset.index = next
+                        } else {
+                            if (e.isTrusted) {
+                                alert('还没有结果！')
+                            } else {
+                                // 打印结果
+                                tag.innerText = '无解'
+                                t.list.filter(o => o.val.length === 1).forEach(o => t.inputs[o.index].value = o.val) // 输出结果
+                                console.warn('无解！', t.list.find(o => !o.val)?.index, '为空！')
+                            }
+                        }
+                        break
+                    default:
+                }
+            }
+        }, false)
+    }
+</script>
+</body>
+</html>
